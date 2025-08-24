@@ -14,9 +14,9 @@ Break your code into functions: <br>
 <br>
 readIR() – detects or decodes IR beacon direction (instead of just sending continuously). <br>
 **getUltrasonicDistance() – already done.** <br>
-followHuman() – uses IR results to decide motor direction. <br>
-avoidObstacle() – uses ultrasonic to avoid. <br>
-driveMotors(leftSpeed, rightSpeed) – low-level motor control. <br>
+followHuman() – uses IR results to decide motor direction. **(need motor driver)** <br>
+avoidObstacle() – uses ultrasonic to avoid. <br> **(need motor driver)**
+driveMotors(leftSpeed, rightSpeed) – low-level motor control. <br> **(need motor driver)**
 
 ##### 2. Create an enum state machine (FOLLOW, AVOID, STOP) to manage navigation logic.
 
@@ -28,7 +28,7 @@ FLOW: <br>
 4. Run behavior based on current state. (Refer to the state machine)  <br>
         
 ### HARDWARE:
-##### 1. ESP32 → Motor Driver:
+##### 1. Buy a Motor Driver:
 Use PWM output pins to control speed and direction via motor driver (L298N, L293D, or similar). <br>
        
 The ESP32 cannot directly drive motors (DC or stepper), because: <br>
