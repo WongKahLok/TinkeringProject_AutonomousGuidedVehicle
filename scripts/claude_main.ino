@@ -58,8 +58,7 @@ float getUltrasonicDistance() {
 
 // ========== Motor Control ==========
 void driveMotors(int leftSpeed, int rightSpeed) {
-  /* If you have 4WD, just wire front+rear motors of the same side in parallel to OUT1/OUT2 (left) and OUT3/OUT4 (right). The driver treats them as one motor. */ 
-
+  
   // Clamp values -255 to 255
   leftSpeed = constrain(leftSpeed, -255, 255);
   rightSpeed = constrain(rightSpeed, -255, 255);
