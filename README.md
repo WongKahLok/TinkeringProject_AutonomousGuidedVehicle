@@ -5,7 +5,7 @@ An AGV that can perform human-following, obstacle avoidance and logistics transp
 
 ### Problems: <br>
 1. How many IR receivers do we need
-2. We need to buy a motor driver 
+2. We need to buy a motor driver, how to connect the driver to 4 motor
 
 # TODO:
 ### SOFTWARE:
