@@ -5,7 +5,7 @@
 #define TRIG_PIN 16
 #define ECHO_PIN 17
 
-// Motor driver pins (example: L298N – adjust as needed)
+// Motor driver pins (L298N)
 #define ENA 25  // PWM speed control Left
 #define IN1 26  // Left motor forward
 #define IN2 27  // Left motor backward
@@ -14,11 +14,31 @@
 #define IN4 34  // Right motor backward
 
 // ========== Globals ==========
+IRrecv irrecv(IR_PIN);  // Create IR receiver object
+decode_results results; // IR results structure
+
 long duration;
 float distance_cm;
 
 enum State { FOLLOW, AVOID, STOP };
 State currentState = FOLLOW;
+
+// Timing variables for non-blocking behavior
+unsigned long lastMeasurement = 0;
+unsigned long lastAvoidAction = 0;
+bool avoidanceInProgress = false;
+int avoidanceStep = 0;
+
+// Distance thresholds
+const float OBSTACLE_THRESHOLD = 20.0;  // cm
+const float SAFE_DISTANCE = 30.0;       // cm
+
+// Motor speeds
+const int FORWARD_SPEED = 180;
+const int TURN_SPEED = 150;
+const int REVERSE_SPEED = 150;
+const int SEARCH_SPEED = 100;
+
 
 // ========== Ultrasonic Function ==========
 float getUltrasonicDistance() {
@@ -29,17 +49,22 @@ float getUltrasonicDistance() {
   digitalWrite(TRIG_PIN, LOW);
 
   duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  if (duration == 0) {
+    return -1; // No echo received (timeout)
+  }
+  
   return duration * 0.0343 / 2;
 }
 
 // ========== Motor Control ==========
 void driveMotors(int leftSpeed, int rightSpeed) {
   /* If you have 4WD, just wire front+rear motors of the same side in parallel to OUT1/OUT2 (left) and OUT3/OUT4 (right). The driver treats them as one motor. */ 
-  // Clamp values 0–255
+
+  // Clamp values -255 to 255
   leftSpeed = constrain(leftSpeed, -255, 255);
   rightSpeed = constrain(rightSpeed, -255, 255);
-
-  // Left motor
+  
+  // Left motor control
   if (leftSpeed >= 0) {
     digitalWrite(IN1, HIGH);
     digitalWrite(IN2, LOW);
@@ -47,10 +72,10 @@ void driveMotors(int leftSpeed, int rightSpeed) {
   } else {
     digitalWrite(IN1, LOW);
     digitalWrite(IN2, HIGH);
-    ledcWrite(0, -leftSpeed);
+    ledcWrite(0, abs(leftSpeed));
   }
-
-  // Right motor
+  
+  // Right motor control
   if (rightSpeed >= 0) {
     digitalWrite(IN3, HIGH);
     digitalWrite(IN4, LOW);
@@ -58,13 +83,18 @@ void driveMotors(int leftSpeed, int rightSpeed) {
   } else {
     digitalWrite(IN3, LOW);
     digitalWrite(IN4, HIGH);
-    ledcWrite(1, -rightSpeed);
+    ledcWrite(1, abs(rightSpeed));
   }
 }
 
 void stopMotors() {
-  driveMotors(0, 0); 
-}
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+  ledcWrite(0, 0);
+  ledcWrite(1, 0);
+}}
 
 bool readIR() {
   if (irrecv.decode(&results)) {
@@ -80,67 +110,173 @@ bool readIR() {
 
 // ========== Behaviors ==========
 void followHuman() {
-  // You need IR RECEIVER logic here
-  // Example: if beacon is left/right/center, steer accordingly  
-
+  static unsigned long lastSearchTime = 0;
+  static bool searchDirection = true; // true = right, false = left
+  
   if (readIR()) {
-    Serial.println("Beacon detected → move forward");
-    driveMotors(180, 180); // straight forward
+    Serial.println("Beacon detected → moving forward");
+    driveMotors(FORWARD_SPEED, FORWARD_SPEED);
+    lastSearchTime = millis(); // Reset search timer
   } else {
-    Serial.println("No beacon detected → stop/search");
-    stopMotors();
-    // optional: rotate slowly to search for beacon
-    // driveMotors(100, -100); // spin in place
+    // No beacon detected - search behavior
+    if (millis() - lastSearchTime > 2000) { // Search every 2 seconds
+      Serial.println("Searching for beacon...");
+      
+      if (searchDirection) {
+        driveMotors(SEARCH_SPEED, -SEARCH_SPEED); // Turn right
+      } else {
+        driveMotors(-SEARCH_SPEED, SEARCH_SPEED); // Turn left
+      }
+      
+      delay(300); // Brief turn
+      stopMotors();
+      searchDirection = !searchDirection; // Alternate search direction
+      lastSearchTime = millis();
+    } else {
+      Serial.println("No beacon detected → stopping");
+      stopMotors();
+    }
   }
 }
 
 void avoidObstacle() {
-  Serial.println("Avoiding obstacle...");
-  stopMotors();
-  delay(200);
-  driveMotors(-150, -150);
-  delay(500);
-  driveMotors(150, -150);
-  delay(500);
-  stopMotors();
+// default sequence: stop → reverse → turn right → forward → correct direction
+  
+  if (!avoidanceInProgress) {
+    // Start avoidance sequence
+    avoidanceInProgress = true;
+    avoidanceStep = 0;
+    lastAvoidAction = millis();
+    Serial.println("Starting obstacle avoidance...");
+  }
+  
+  unsigned long currentTime = millis();
+  
+  switch (avoidanceStep) {
+    case 0: // Stop
+      stopMotors();
+      if (currentTime - lastAvoidAction > 200) {
+        avoidanceStep = 1;
+        lastAvoidAction = currentTime;
+      }
+      break;
+      
+    case 1: // Reverse
+      Serial.println("Reversing...");
+      driveMotors(-REVERSE_SPEED, -REVERSE_SPEED);
+      if (currentTime - lastAvoidAction > 500) {
+        avoidanceStep = 2;
+        lastAvoidAction = currentTime;
+      }
+      break;
+      
+    case 2: // Turn right
+      Serial.println("Turning right...");
+      driveMotors(TURN_SPEED, -TURN_SPEED);
+      if (currentTime - lastAvoidAction > 800) {
+        avoidanceStep = 3;
+        lastAvoidAction = currentTime;
+      }
+      break;
+      
+    case 3: // Move forward briefly
+      Serial.println("Moving forward...");
+      driveMotors(FORWARD_SPEED, FORWARD_SPEED);
+      if (currentTime - lastAvoidAction > 600) {
+        avoidanceStep = 4;
+        lastAvoidAction = currentTime;
+      }
+      break;
+      
+    case 4: // Turn left to resume original direction
+      Serial.println("Correcting direction...");
+      driveMotors(-TURN_SPEED, TURN_SPEED);
+      if (currentTime - lastAvoidAction > 400) {
+        // End avoidance sequence
+        stopMotors();
+        avoidanceInProgress = false;
+        avoidanceStep = 0;
+        Serial.println("Obstacle avoidance complete");
+      }
+      break;
+  }
 }
+
 
 // ========== Setup ==========
 void setup() {
   Serial.begin(115200);
-
-  // IR setup
-  IrSender.begin(IR_PIN);
-
-  // Ultrasonic setup
+  Serial.println("ESP32 AGV Starting...");
+  
+  // IR receiver setup 
+  irrecv.enableIRIn(); // Start the IR receiver
+  
+  // Ultrasonic sensor setup
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
-
-  // Motor setup...
-  pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT);
-  pinMode(IN3, OUTPUT); pinMode(IN4, OUTPUT);
-  ledcAttachPin(ENA, 0); // Channel 0
-  ledcAttachPin(ENB, 1); // Channel 1
-  ledcSetup(0, 1000, 8); // 1kHz, 8-bit
+  
+  // Motor driver setup
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+  
+  // PWM setup for motor speed control
+  ledcAttachPin(ENA, 0); // Channel 0 for left motor
+  ledcAttachPin(ENB, 1); // Channel 1 for right motor
+  ledcSetup(0, 1000, 8); // 1kHz frequency, 8-bit resolution
   ledcSetup(1, 1000, 8);
+  
+  // Initialize motors to stop
+  stopMotors();
+  
+  Serial.println("Setup complete. AGV ready!");
 }
 
-// ========== Loop ==========
+// ========== Main Loop ==========
 void loop() {
-  distance_cm = getUltrasonicDistance();
-  Serial.print("Distance: "); Serial.println(distance_cm);
-
-  if (distance_cm > 0 && distance_cm < 20) {
-    currentState = AVOID;
-  } else {
-    currentState = FOLLOW;
+  unsigned long currentTime = millis();
+  
+  // Read ultrasonic sensor (non-blocking with timing control)
+  if (currentTime - lastMeasurement > 50) { // Update every 50ms
+    distance_cm = getUltrasonicDistance();
+    lastMeasurement = currentTime;
+    
+    Serial.print("Distance: ");
+    if (distance_cm < 0) {
+      Serial.println("No reading");
+    } else {
+      Serial.print(distance_cm);
+      Serial.println(" cm");
+    }
   }
-
+  
+  // State machine logic
+  if (!avoidanceInProgress) {
+    if (distance_cm > 0 && distance_cm < OBSTACLE_THRESHOLD) {
+      currentState = AVOID;
+    } else if (distance_cm < 0 || distance_cm > SAFE_DISTANCE) {
+      currentState = FOLLOW;
+    }
+  }
+  
+  // Execute current state behavior
   switch (currentState) {
-    case FOLLOW: followHuman(); break;
-    case AVOID: avoidObstacle(); break;
-    case STOP: stopMotors(); break;
+    case FOLLOW:
+      if (!avoidanceInProgress) {
+        followHuman();
+      }
+      break;
+      
+    case AVOID:
+      avoidObstacle();
+      break;
+      
+    case STOP:
+      stopMotors();
+      break;
   }
-
-  delay(50);
+  
+  // Small delay to prevent overwhelming the processor
+  delay(10);
 }
