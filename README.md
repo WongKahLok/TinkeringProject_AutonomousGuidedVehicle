@@ -15,8 +15,8 @@ Break your code into functions: <br>
 readIR() – detects or decodes IR beacon direction (instead of just sending continuously). <br>
 **getUltrasonicDistance() – already done.** <br>
 followHuman() – uses IR results to decide motor direction. **(need motor driver)** <br>
-avoidObstacle() – uses ultrasonic to avoid. <br> **(need motor driver)**
-driveMotors(leftSpeed, rightSpeed) – low-level motor control. <br> **(need motor driver)**
+avoidObstacle() – uses ultrasonic to avoid. **(need motor driver)** <br> 
+driveMotors(leftSpeed, rightSpeed) – low-level motor control. **(need motor driver)** <br> 
 
 ##### 2. Create an enum state machine (FOLLOW, AVOID, STOP) to manage navigation logic.
 
