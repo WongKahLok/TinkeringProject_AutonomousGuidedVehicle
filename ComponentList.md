@@ -1,4 +1,4 @@
-1. 1N4007 Diode x5
+1. 1N4007 Diode x1
 2. Electrolytic capacitor 470–1000 µF x2
 3. bulk capacitor 1000–2200 µF x2
 4. 4× AA battery holder x1
