@@ -11,7 +11,7 @@ An AGV that can perform human-following, obstacle avoidance and logistics transp
 1. IR receiver code
 2. buy a motor driver
 3. connect esp32 to battery
-4. understand the code
+4. ppt
 
 # TODO:
 ### SOFTWARE:
