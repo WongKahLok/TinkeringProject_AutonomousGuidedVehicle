@@ -3,15 +3,11 @@ An AGV that can perform human-following, obstacle avoidance and logistics transp
 
 ### GOAL: Merge everything into main.ino, when we run the file, the car runs.
 
-### Problems: <br>
-1. How many IR receivers do we need
-2. We need to buy a motor driver
-
 ### Done by today :)
-1. IR receiver code
-2. buy a motor driver
+1. IR receiver code **done**
+2. buy a motor driver **done**
 3. connect esp32 to battery
-4. ppt
+4. ppt **done** 
 
 # TODO:
 ### SOFTWARE:
@@ -46,6 +42,10 @@ If you connect a motor directly → you’ll burn the ESP32 pin instantly.
 ##### 2. Power Supply:
 Battery → ESP32 & motor driver (share common GND).
 
+##### 3. Connection:
+Motor driver on the same breadboard as the battery pack
+ESP32 on another breadboard connected to another battery pack
+Connect two breadboard together 
 
 ### TESTING:
 Test motors alone with driveMotors() + stopMotors(). <br>
