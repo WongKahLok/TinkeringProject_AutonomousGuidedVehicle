@@ -4,10 +4,10 @@ An AGV that can perform human-following, obstacle avoidance and logistics transp
 ### GOAL: Merge everything into main.ino, when we run the file, the car runs.
 
 ### Done by today :)
-1. IR receiver code **done**
-2. buy a motor driver **done**
-3. connect esp32 to battery
-4. ppt **done** 
+1. connect esp32 to battery and motor driver
+2. Integrate IR receiver code into the .ino file
+3. test the final file
+4. ppt 
 
 # TODO:
 ### SOFTWARE:
