@@ -5,9 +5,13 @@ An AGV that can perform human-following, obstacle avoidance and logistics transp
 
 ### Done by today :)
 1. connect esp32 to battery and motor driver
-2. Integrate IR receiver code into the .ino file
-3. test the final file
-4. ppt 
+2. merge IR receiver code into the .ino file
+---
+3. test motor control function
+4. test follow human function
+5. test avoid obstacle function (depends on our progress)
+---
+6. ppt 
 
 # TODO:
 ### SOFTWARE:
