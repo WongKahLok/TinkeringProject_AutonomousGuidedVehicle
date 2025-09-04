@@ -1,0 +1,343 @@
+/******************************************************
+ * ESP32 Auto Car Carrier w/ IR Beacon Follow + Avoid
+ * Combined & cleaned version (IRremote v3 API)
+ * 
+ * Libraries:
+ *   - Arduino-IRremote (v3.x): https://github.com/Arduino-IRremote/Arduino-IRremote
+ ******************************************************/
+
+#include <Arduino.h>
+#include <IRremote.hpp>   // Use v3.x API: IrReceiver, decode(), decodedIRData, resume()
+
+// =================== Pins ===================
+#define IR_RECEIVE_PIN 4
+
+// Ultrasonic (HC-SR04)
+#define TRIG_PIN 16
+#define ECHO_PIN 17
+
+// L298N Motor driver pins
+#define ENA 25  // PWM speed control Left
+#define IN1 26  // Left motor forward
+#define IN2 27  // Left motor backward
+#define ENB 32  // PWM speed control Right
+#define IN3 33  // Right motor forward
+#define IN4 14  // Right motor backward  (!!! moved from 34 -> 14; 34 is input-only)
+
+// =================== Globals ===================
+unsigned long lastIRTime = 0;
+uint32_t lastIRCommand = 0;
+const unsigned long IR_DEBOUNCE_MS = 200;
+
+long duration;
+float distance_cm = -1;
+
+enum State { FOLLOW, AVOID, STOP };
+State currentState = FOLLOW;
+
+// Timing for non-blocking loops
+unsigned long lastMeasurement = 0;
+unsigned long lastAvoidAction = 0;
+bool avoidanceInProgress = false;
+int  avoidanceStep = 0;
+
+// Distance thresholds
+const float OBSTACLE_THRESHOLD = 20.0;  // cm
+const float SAFE_DISTANCE      = 30.0;  // cm
+
+// Motor speeds (0..255)
+int FORWARD_SPEED = 180;
+int TURN_SPEED    = 150;
+int REVERSE_SPEED = 150;
+int SEARCH_SPEED  = 100;
+
+// =================== Helpers ===================
+
+// Ultrasonic distance (cm), returns -1 on timeout
+float getUltrasonicDistance() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  duration = pulseIn(ECHO_PIN, HIGH, 30000); // 30ms timeout ~ 5m
+  if (duration == 0) return -1;
+  return duration * 0.0343f / 2.0f;
+}
+
+// Drive motors: speed in range -255..255 (sign = direction)
+void driveMotors(int leftSpeed, int rightSpeed) {
+  leftSpeed  = constrain(leftSpeed,  -255, 255);
+  rightSpeed = constrain(rightSpeed, -255, 255);
+
+  // Left
+  if (leftSpeed >= 0) {
+    digitalWrite(IN1, HIGH);
+    digitalWrite(IN2, LOW);
+    ledcWrite(0, leftSpeed);
+  } else {
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, HIGH);
+    ledcWrite(0, abs(leftSpeed));
+  }
+
+  // Right
+  if (rightSpeed >= 0) {
+    digitalWrite(IN3, HIGH);
+    digitalWrite(IN4, LOW);
+    ledcWrite(1, rightSpeed);
+  } else {
+    digitalWrite(IN3, LOW);
+    digitalWrite(IN4, HIGH);
+    ledcWrite(1, abs(rightSpeed));
+  }
+}
+
+void stopMotors() {
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+  ledcWrite(0, 0);
+  ledcWrite(1, 0);
+}
+
+// =================== IR Handling ===================
+
+// Optional: interpret specific commands (adjust codes to your remote)
+void interpretCommand(uint32_t cmd) {
+  switch (cmd) {
+    // Example POWER / STOP
+    case 0x40: case 0x45: case 0x12:
+      Serial.println("IR Action: POWER/STOP → STOP state");
+      currentState = STOP;
+      stopMotors();
+      break;
+
+    // Example START / FOLLOW
+    case 0x16: case 0x0C:
+      Serial.println("IR Action: OK/ENTER → FOLLOW state");
+      currentState = FOLLOW;
+      break;
+
+    // Speed up / down examples
+    case 0x18: case 0x46:  // VOL+
+      FORWARD_SPEED = min(FORWARD_SPEED + 10, 255);
+      TURN_SPEED    = min(TURN_SPEED + 10, 255);
+      REVERSE_SPEED = min(REVERSE_SPEED + 10, 255);
+      SEARCH_SPEED  = min(SEARCH_SPEED + 10, 255);
+      Serial.printf("IR Action: SPEED UP → F:%d T:%d R:%d S:%d\n",
+                    FORWARD_SPEED, TURN_SPEED, REVERSE_SPEED, SEARCH_SPEED);
+      break;
+
+    case 0x19: case 0x47:  // VOL-
+      FORWARD_SPEED = max(FORWARD_SPEED - 10, 0);
+      TURN_SPEED    = max(TURN_SPEED - 10, 0);
+      REVERSE_SPEED = max(REVERSE_SPEED - 10, 0);
+      SEARCH_SPEED  = max(SEARCH_SPEED - 10, 0);
+      Serial.printf("IR Action: SPEED DOWN → F:%d T:%d R:%d S:%d\n",
+                    FORWARD_SPEED, TURN_SPEED, REVERSE_SPEED, SEARCH_SPEED);
+      break;
+
+    default:
+      Serial.printf("IR Action: UNKNOWN (0x%lX)\n", (unsigned long)cmd);
+      break;
+  }
+}
+
+// Returns true if a **fresh, valid** IR signal (any protocol/command) was received.
+// Also calls interpretCommand() for mapped buttons.
+bool readIRBeacon() {
+  if (!IrReceiver.decode()) return false;
+
+  unsigned long now = millis();
+  auto &data = IrReceiver.decodedIRData;
+
+  bool valid = (data.protocol != UNKNOWN && data.command != 0);
+  bool fresh = (now - lastIRTime > IR_DEBOUNCE_MS) || (data.command != lastIRCommand);
+
+  if (valid && fresh) {
+    Serial.println("--- IR Signal Received ---");
+    Serial.print("Protocol: "); Serial.println(getProtocolString(data.protocol));
+    Serial.print("Address:  0x"); Serial.println(data.address, HEX);
+    Serial.print("Command:  0x"); Serial.println(data.command, HEX);
+
+    // Let command mapping adjust state/speeds
+    interpretCommand(data.command);
+
+    lastIRTime = now;
+    lastIRCommand = data.command;
+
+    // Even if command maps to STOP, it's still a valid "beacon seen" event
+    // for your follow logic (you can change this if you prefer).
+    IrReceiver.resume();
+    return true;
+  }
+
+  IrReceiver.resume();
+  return false;
+}
+
+// =================== Behaviors ===================
+
+void followHuman() {
+  static unsigned long lastSearchTime = 0;
+  static bool searchRight = true;
+
+  if (readIRBeacon() && currentState == FOLLOW) {
+    Serial.println("Beacon detected → moving forward");
+    driveMotors(FORWARD_SPEED, FORWARD_SPEED);
+    lastSearchTime = millis();
+  } else {
+    // No beacon (or STOP state) → search or stop
+    if (currentState != FOLLOW) {
+      stopMotors();
+      return;
+    }
+
+    if (millis() - lastSearchTime > 2000) {
+      Serial.println("Searching for beacon...");
+      if (searchRight) {
+        driveMotors(SEARCH_SPEED, -SEARCH_SPEED); // turn right
+      } else {
+        driveMotors(-SEARCH_SPEED, SEARCH_SPEED); // turn left
+      }
+      delay(300);   // quick sample turn
+      stopMotors();
+      searchRight = !searchRight;
+      lastSearchTime = millis();
+    } else {
+      Serial.println("No beacon detected → stopping");
+      stopMotors();
+    }
+  }
+}
+
+void avoidObstacle() {
+  // Sequence: stop → reverse → turn right → forward → correct left → done
+  if (!avoidanceInProgress) {
+    avoidanceInProgress = true;
+    avoidanceStep = 0;
+    lastAvoidAction = millis();
+    Serial.println("Starting obstacle avoidance...");
+  }
+
+  unsigned long t = millis();
+  switch (avoidanceStep) {
+    case 0:
+      stopMotors();
+      if (t - lastAvoidAction > 200) { avoidanceStep = 1; lastAvoidAction = t; }
+      break;
+    case 1:
+      Serial.println("Reversing...");
+      driveMotors(-REVERSE_SPEED, -REVERSE_SPEED);
+      if (t - lastAvoidAction > 500) { avoidanceStep = 2; lastAvoidAction = t; }
+      break;
+    case 2:
+      Serial.println("Turning right...");
+      driveMotors(TURN_SPEED, -TURN_SPEED);
+      if (t - lastAvoidAction > 800) { avoidanceStep = 3; lastAvoidAction = t; }
+      break;
+    case 3:
+      Serial.println("Moving forward...");
+      driveMotors(FORWARD_SPEED, FORWARD_SPEED);
+      if (t - lastAvoidAction > 600) { avoidanceStep = 4; lastAvoidAction = t; }
+      break;
+    case 4:
+      Serial.println("Correcting direction (left)...");
+      driveMotors(-TURN_SPEED, TURN_SPEED);
+      if (t - lastAvoidAction > 400) {
+        stopMotors();
+        avoidanceInProgress = false;
+        avoidanceStep = 0;
+        Serial.println("Obstacle avoidance complete");
+        currentState = FOLLOW; // resume
+      }
+      break;
+  }
+}
+
+// =================== Setup / Loop ===================
+
+void setup() {
+  Serial.begin(115200);
+  delay(200);
+  Serial.println("\nESP32 Auto Carrier Starting...");
+
+  // IR receiver
+  IrReceiver.begin(IR_RECEIVE_PIN, DISABLE_LED_FEEDBACK); // less noise on ESP32
+  Serial.println("IR Receiver ready.");
+
+  // Ultrasonic
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  // Motor pins
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+
+  // PWM for ENA/ENB
+  ledcAttachPin(ENA, 0); // left motor channel 0
+  ledcAttachPin(ENB, 1); // right motor channel 1
+  ledcSetup(0, 1000, 8); // 1kHz, 8-bit
+  ledcSetup(1, 1000, 8);
+
+  stopMotors();
+
+  Serial.println("Setup complete. Ready!");
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  // Ultrasonic updates every 50ms
+  if (now - lastMeasurement > 50) {
+    distance_cm = getUltrasonicDistance();
+    lastMeasurement = now;
+
+    Serial.print("Distance: ");
+    if (distance_cm < 0) Serial.println("No reading");
+    else { Serial.print(distance_cm); Serial.println(" cm"); }
+  }
+
+  // Update state based on distance (unless mid-avoidance)
+  if (!avoidanceInProgress) {
+    if (distance_cm > 0 && distance_cm < OBSTACLE_THRESHOLD) {
+      currentState = AVOID;
+    } else if (distance_cm < 0 || distance_cm > SAFE_DISTANCE) {
+      // Only resume follow if not manually STOPed via IR
+      if (currentState != STOP) currentState = FOLLOW;
+    }
+  }
+
+  // Run behavior
+  switch (currentState) {
+    case FOLLOW:
+      if (!avoidanceInProgress) followHuman();
+      break;
+
+    case AVOID:
+      avoidObstacle();
+      break;
+
+    case STOP:
+      stopMotors();
+      // Still handle IR to allow resuming; readIRBeacon() is called inside followHuman
+      // but we can also peek here for commands:
+      if (IrReceiver.decode()) {
+        auto &data = IrReceiver.decodedIRData;
+        if (data.protocol != UNKNOWN && data.command != 0) {
+          interpretCommand(data.command);
+          lastIRTime = now;
+          lastIRCommand = data.command;
+        }
+        IrReceiver.resume();
+      }
+      break;
+  }
+
+  delay(10);
+}
